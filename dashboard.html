@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AZIZA — ECU Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:        #090c0f;
+    --bg2:       #0e1318;
+    --bg3:       #141b22;
+    --border:    #1e2d3a;
+    --accent:    #00d4ff;
+    --accent2:   #ff6b00;
+    --danger:    #ff2a2a;
+    --warn:      #ffb300;
+    --ok:        #00e676;
+    --text:      #c8dde8;
+    --text-dim:  #4a6272;
+    --mono:      'Share Tech Mono', monospace;
+    --sans:      'Barlow Condensed', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,212,255,0.015) 2px,
+      rgba(0,212,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky; top: 0; z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--sans);
+    font-weight: 900;
+    font-size: 2rem;
+    letter-spacing: 0.25em;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,212,255,0.5);
+  }
+
+  .logo span { color: var(--text-dim); font-weight: 300; font-size: 0.9rem; letter-spacing: 0.1em; display: block; }
+
+  .ws-status {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 0.75rem; color: var(--text-dim);
+  }
+  .ws-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
+    transition: all 0.3s;
+  }
+  .ws-dot.connected { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+  .cycle-count {
+    font-family: var(--mono); font-size: 0.75rem; color: var(--text-dim);
+    text-align: right;
+  }
+
+  /* ── Layout ── */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 16px;
+    padding: 20px 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* ── Panel base ── */
+  .panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .panel::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.4;
+  }
+
+  .panel.danger-active::before { background: linear-gradient(90deg, transparent, var(--danger), transparent); opacity: 1; }
+  .panel.warn-active::before   { background: linear-gradient(90deg, transparent, var(--warn), transparent); opacity: 1; }
+
+  .panel-title {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  /* ── Gauges row ── */
+  .gauges-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+  }
+
+  .gauge-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 20px 16px 16px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .gauge-panel::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.3;
+  }
+
+  .gauge-label {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .gauge-value {
+    font-family: var(--mono);
+    font-size: 2.6rem;
+    font-weight: normal;
+    line-height: 1;
+    color: var(--accent);
+    transition: color 0.3s;
+    text-shadow: 0 0 20px rgba(0,212,255,0.3);
+  }
+
+  .gauge-unit {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+    letter-spacing: 0.1em;
+  }
+
+  /* Arc gauge */
+  .arc-container { position: relative; width: 100px; height: 60px; margin: 0 auto 6px; }
+  .arc-container svg { width: 100%; height: auto; }
+
+  /* State badge */
+  .state-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    letter-spacing: 0.1em;
+    font-weight: normal;
+    border: 1px solid currentColor;
+    margin-top: 8px;
+  }
+
+  .state-NORMAL  { color: var(--ok);     border-color: var(--ok);     text-shadow: 0 0 8px var(--ok); }
+  .state-REDUCED { color: var(--warn);   border-color: var(--warn);   text-shadow: 0 0 8px var(--warn); }
+  .state-LIMITED { color: var(--danger); border-color: var(--danger); text-shadow: 0 0 8px var(--danger); }
+  .state-OFF     { color: var(--text-dim); border-color: var(--text-dim); }
+
+  .risk-NORMAL     { color: var(--ok);     border-color: var(--ok); }
+  .risk-SUSPICIOUS { color: var(--warn);   border-color: var(--warn); }
+  .risk-CRITICAL   { color: var(--danger); border-color: var(--danger); animation: pulse-danger 0.8s infinite; }
+
+  @keyframes pulse-danger {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.5; }
+  }
+
+  /* ── Charts ── */
+  .charts-row {
+    grid-column: 1 / 3;
+  }
+
+  canvas { width: 100% !important; }
+
+  /* ── Controls ── */
+  .controls-panel { grid-column: 3 / 4; }
+
+  .control-group { margin-bottom: 20px; }
+
+  .control-label {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: block;
+  }
+
+  .btn {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 10px 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.2s;
+    margin-right: 8px;
+    margin-bottom: 8px;
+  }
+
+  .btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.05); }
+  .btn.active { border-color: var(--ok); color: var(--ok); background: rgba(0,230,118,0.08); }
+  .btn.danger { border-color: var(--danger); color: var(--danger); }
+  .btn.danger:hover { background: rgba(255,42,42,0.08); }
+
+  .speed-control {
+    display: flex; align-items: center; gap: 12px;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(0,212,255,0.6);
+  }
+
+  .speed-val {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    min-width: 48px;
+    text-align: right;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+  }
+
+  /* Violations */
+  .violations-list {
+    list-style: none;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+
+  .violations-list li {
+    padding: 3px 8px;
+    border-left: 2px solid var(--warn);
+    color: var(--warn);
+    background: rgba(255,179,0,0.05);
+  }
+
+  .violations-list li.critical {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: rgba(255,42,42,0.05);
+  }
+
+  .no-violations {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--ok);
+  }
+
+  /* ── Log ── */
+  .log-panel {
+    grid-column: 1 / -1;
+  }
+
+  .log-feed {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    line-height: 1.6;
+    height: 180px;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    border-radius: 2px;
+  }
+
+  .log-feed::-webkit-scrollbar { width: 4px; }
+  .log-feed::-webkit-scrollbar-track { background: var(--bg); }
+  .log-feed::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .log-line { color: var(--text-dim); }
+  .log-line.can    { color: #5bc0f0; }
+  .log-line.engine { color: #f0a050; }
+  .log-line.brake  { color: #f06060; }
+  .log-line.safety { color: var(--warn); }
+  .log-line.ai     { color: #b070f0; }
+  .log-line.aziza  { color: var(--accent); }
+  .log-line.sensor { color: #70e0a0; }
+  .log-line.body   { color: #70a0e0; }
+  .log-line.lin    { color: #a0d0e0; }
+
+  /* ── Bus activity ── */
+  .bus-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .bus-messages {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .bus-msg {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 8px;
+    background: var(--bg3);
+    border-radius: 2px;
+    border-left: 2px solid var(--accent);
+    animation: fadeIn 0.3s ease;
+  }
+
+  .bus-msg.lin { border-color: #a0d0e0; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+
+  .bus-id   { color: var(--accent); min-width: 50px; }
+  .bus-data { color: var(--text); flex: 1; }
+  .bus-time { color: var(--text-dim); font-size: 0.6rem; }
+
+  /* Scrollbar global */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg2); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Animations */
+  @keyframes glow-ok {
+    0%, 100% { box-shadow: 0 0 0 rgba(0,230,118,0); }
+    50%       { box-shadow: 0 0 12px rgba(0,230,118,0.3); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">AZIZA <span>Distributed Automotive ECU Simulation</span></div>
+  <div class="cycle-count">CYCLE <span id="cycleNum">—</span></div>
+  <div class="ws-status">
+    <div class="ws-dot" id="wsDot"></div>
+    <span id="wsLabel">DISCONNECTED</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ── Gauges ── -->
+  <div class="gauges-row">
+
+    <div class="gauge-panel" id="gaugeSpeed">
+      <div class="gauge-label">Speed</div>
+      <div class="arc-container">
+        <svg viewBox="0 0 100 55" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#1e2d3a" stroke-width="6" stroke-linecap="round"/>
+          <path id="arcSpeed" d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#00d4ff" stroke-width="6" stroke-linecap="round"
+                stroke-dasharray="125.6" stroke-dashoffset="125.6" style="transition:stroke-dashoffset 0.8s ease"/>
+        </svg>
+      </div>
+      <div class="gauge-value" id="valSpeed">0.0</div>
+      <div class="gauge-unit">km/h</div>
+    </div>
+
+    <div class="gauge-panel" id="gaugeTemp">
+      <div class="gauge-label">Engine Temp</div>
+      <div class="arc-container">
+        <svg viewBox="0 0 100 55" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#1e2d3a" stroke-width="6" stroke-linecap="round"/>
+          <path id="arcTemp" d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#00d4ff" stroke-width="6" stroke-linecap="round"
+                stroke-dasharray="125.6" stroke-dashoffset="125.6" style="transition:stroke-dashoffset 0.8s ease,stroke 0.3s"/>
+        </svg>
+      </div>
+      <div class="gauge-value" id="valTemp">—</div>
+      <div class="gauge-unit">°C</div>
+    </div>
+
+    <div class="gauge-panel" id="gaugeBrake">
+      <div class="gauge-label">Brake Pressure</div>
+      <div class="arc-container">
+        <svg viewBox="0 0 100 55" xmlns="http://www.w3.org/2000/svg">
+          <path d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#1e2d3a" stroke-width="6" stroke-linecap="round"/>
+          <path id="arcBrake" d="M10 50 A40 40 0 0 1 90 50" fill="none" stroke="#00d4ff" stroke-width="6" stroke-linecap="round"
+                stroke-dasharray="125.6" stroke-dashoffset="125.6" style="transition:stroke-dashoffset 0.5s ease,stroke 0.3s"/>
+        </svg>
+      </div>
+      <div class="gauge-value" id="valBrake">0.00</div>
+      <div class="gauge-unit">pressure</div>
+    </div>
+
+    <div class="gauge-panel" id="gaugeEngine">
+      <div class="gauge-label">Engine State</div>
+      <div style="margin: 18px 0 10px;">
+        <div class="state-badge state-NORMAL" id="engineStateBadge">NORMAL</div>
+      </div>
+      <div class="gauge-unit" id="cruiseStatus">Cruise: OFF</div>
+    </div>
+
+    <div class="gauge-panel" id="gaugeAI">
+      <div class="gauge-label">AI Risk Level</div>
+      <div style="margin: 18px 0 10px;">
+        <div class="state-badge risk-NORMAL" id="aiRiskBadge">NORMAL</div>
+      </div>
+      <div class="gauge-unit" id="aiScore">Score: 0</div>
+    </div>
+
+  </div>
+
+  <!-- ── Charts ── -->
+  <div class="panel charts-row">
+    <div class="panel-title">Live Telemetry — Last 60 Cycles</div>
+    <canvas id="chartMain" height="180"></canvas>
+  </div>
+
+  <!-- ── Controls ── -->
+  <div class="panel controls-panel">
+    <div class="panel-title">Control Panel</div>
+
+    <div class="control-group">
+      <span class="control-label">Cruise Control</span>
+      <button class="btn" id="btnCruiseOn"  onclick="cruiseOn()">Enable</button>
+      <button class="btn danger" id="btnCruiseOff" onclick="cruiseOff()">Disable</button>
+    </div>
+
+    <hr class="divider"/>
+
+    <div class="control-group">
+      <span class="control-label">Target Speed</span>
+      <div class="speed-control">
+        <input type="range" id="targetSpeed" min="20" max="140" value="80" oninput="updateTargetSpeed(this.value)"/>
+        <span class="speed-val" id="targetSpeedVal">80</span>
+        <span style="font-size:0.65rem;color:var(--text-dim)">km/h</span>
+      </div>
+      <button class="btn" style="margin-top:10px;width:100%" onclick="applyTargetSpeed()">Apply Speed</button>
+    </div>
+
+    <hr class="divider"/>
+
+    <div class="control-group">
+      <span class="control-label">Safety Violations</span>
+      <ul class="violations-list" id="violationsList">
+        <li style="border:none;color:var(--text-dim);background:none">No violations</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── Bus Activity ── -->
+  <div class="bus-row">
+    <div class="panel">
+      <div class="panel-title">CAN Bus — Recent Messages</div>
+      <div class="bus-messages" id="canMessages"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">LIN Bus — Recent Transactions</div>
+      <div class="bus-messages" id="linMessages"></div>
+    </div>
+  </div>
+
+  <!-- ── Log Feed ── -->
+  <div class="panel log-panel">
+    <div class="panel-title">System Log</div>
+    <div class="log-feed" id="logFeed"></div>
+  </div>
+
+</div>
+
+<script>
+// ── WebSocket ──────────────────────────────────────────────
+const WS_URL = 'ws://127.0.0.1:8765/ws';
+let ws = null;
+let cycleCount = 0;
+let reconnectTimer = null;
+
+// Chart history
+const HISTORY = 60;
+const history = {
+  labels:  Array(HISTORY).fill(''),
+  speed:   Array(HISTORY).fill(null),
+  temp:    Array(HISTORY).fill(null),
+  brake:   Array(HISTORY).fill(null),
+  throttle:Array(HISTORY).fill(null),
+};
+
+// CAN / LIN message buffers
+let canBuf = [];
+let linBuf = [];
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    document.getElementById('wsDot').classList.add('connected');
+    document.getElementById('wsLabel').textContent = 'CONNECTED';
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onclose = () => {
+    document.getElementById('wsDot').classList.remove('connected');
+    document.getElementById('wsLabel').textContent = 'RECONNECTING…';
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.state) updateDashboard(msg.state);
+      if (msg.log)   appendLog(msg.log);
+    } catch(e) {}
+  };
+}
+
+connect();
+
+// ── Dashboard update ───────────────────────────────────────
+function updateDashboard(s) {
+  cycleCount++;
+  document.getElementById('cycleNum').textContent = String(cycleCount).padStart(4,'0');
+
+  // Gauges
+  setArc('arcSpeed',  s.speed,       0, 150);
+  setArc('arcTemp',   s.temperature, 60, 130);
+  setArc('arcBrake',  s.brake_pressure, 0, 1);
+
+  document.getElementById('valSpeed').textContent = (s.speed||0).toFixed(1);
+  document.getElementById('valTemp').textContent  = (s.temperature||0).toFixed(1);
+  document.getElementById('valBrake').textContent = (s.brake_pressure||0).toFixed(2);
+
+  // Color arcs by severity
+  colorArc('arcTemp', s.temperature, 100, 120);
+  colorArc('arcBrake', s.brake_pressure, 0.5, 0.8);
+
+  // Engine state
+  const esBadge = document.getElementById('engineStateBadge');
+  esBadge.textContent = s.engine_state || 'NORMAL';
+  esBadge.className = 'state-badge state-' + (s.engine_state || 'NORMAL');
+
+  // Cruise
+  document.getElementById('cruiseStatus').textContent =
+    'Cruise: ' + (s.cruise_active ? 'ON' : 'OFF');
+
+  // AI risk
+  const aiB = document.getElementById('aiRiskBadge');
+  aiB.textContent = s.ai_risk || 'NORMAL';
+  aiB.className   = 'state-badge risk-' + (s.ai_risk || 'NORMAL');
+
+  // Violations
+  const vl = document.getElementById('violationsList');
+  if (s.violations && s.violations.length) {
+    vl.innerHTML = s.violations.map(v => {
+      const cls = v.includes('CRITICAL') ? 'critical' : '';
+      return `<li class="${cls}">${escHtml(v)}</li>`;
+    }).join('');
+  } else {
+    vl.innerHTML = '<li style="border:none;color:var(--ok);background:none">✓ No violations</li>';
+  }
+
+  // Simulated CAN messages
+  const now = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  canBuf.unshift(
+    { id:'0x101', data:`temp=${(s.temperature||0).toFixed(1)}`, time: now },
+    { id:'0x102', data:`speed=${(s.speed||0).toFixed(1)}`,      time: now },
+    { id:'0x201', data:`brake=${(s.brake_pressure||0).toFixed(2)}`, time: now }
+  );
+  if (canBuf.length > 9) canBuf = canBuf.slice(0,9);
+  renderBusMessages('canMessages', canBuf, false);
+
+  // Simulated LIN messages
+  linBuf.unshift(
+    { id:'LIN_LIGHTING', data:`lights=${s.lights_on ? 'ON':'OFF'}`, time: now },
+    { id:'LIN_HVAC',     data:`fan=${s.fan_speed ?? '—'}`,           time: now }
+  );
+  if (linBuf.length > 6) linBuf = linBuf.slice(0,6);
+  renderBusMessages('linMessages', linBuf, true);
+
+  // Chart history
+  history.speed.push(s.speed || 0);
+  history.temp.push(s.temperature || 0);
+  history.brake.push((s.brake_pressure || 0) * 150); // scale to km/h range for visibility
+  history.throttle.push((s.throttle || 0) * 150);
+  history.labels.push('');
+  ['speed','temp','brake','throttle','labels'].forEach(k => {
+    if (history[k].length > HISTORY) history[k].shift();
+  });
+  if (chart) {
+    chart.data.datasets[0].data = [...history.speed];
+    chart.data.datasets[1].data = [...history.temp];
+    chart.data.datasets[2].data = [...history.brake];
+    chart.data.datasets[3].data = [...history.throttle];
+    chart.update('none');
+  }
+}
+
+function setArc(id, value, min, max) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  const total = 125.6;
+  el.style.strokeDashoffset = (total - pct * total).toFixed(2);
+}
+
+function colorArc(id, value, warnAt, dangerAt) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (value >= dangerAt)      el.setAttribute('stroke', 'var(--danger)');
+  else if (value >= warnAt)   el.setAttribute('stroke', 'var(--warn)');
+  else                         el.setAttribute('stroke', 'var(--accent)');
+}
+
+function renderBusMessages(containerId, buf, isLin) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = buf.map(m =>
+    `<div class="bus-msg ${isLin?'lin':''}">
+      <span class="bus-id">${escHtml(m.id)}</span>
+      <span class="bus-data">${escHtml(m.data)}</span>
+      <span class="bus-time">${m.time}</span>
+    </div>`
+  ).join('');
+}
+
+// ── Log feed ───────────────────────────────────────────────
+const LOG_MAX = 200;
+let logLines = [];
+
+function appendLog(lines) {
+  if (!lines || !lines.length) return;
+  const feed = document.getElementById('logFeed');
+  const wasAtBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 30;
+
+  lines.forEach(line => {
+    logLines.push(line);
+    if (logLines.length > LOG_MAX) logLines.shift();
+  });
+
+  feed.innerHTML = logLines.map(line => {
+    let cls = 'log-line';
+    if (line.includes('[CAN]'))    cls += ' can';
+    else if (line.includes('[ENGINE]')) cls += ' engine';
+    else if (line.includes('[BRAKE]'))  cls += ' brake';
+    else if (line.includes('[SAFETY]')) cls += ' safety';
+    else if (line.includes('[AI]'))     cls += ' ai';
+    else if (line.includes('[AZIZA]'))  cls += ' aziza';
+    else if (line.includes('[SENSOR]')) cls += ' sensor';
+    else if (line.includes('[BODY]'))   cls += ' body';
+    else if (line.includes('[LIN]'))    cls += ' lin';
+    return `<div class="${cls}">${escHtml(line)}</div>`;
+  }).join('');
+
+  if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+// ── Controls ───────────────────────────────────────────────
+function send(cmd) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(cmd));
+  }
+}
+
+function cruiseOn() {
+  const speed = parseInt(document.getElementById('targetSpeed').value);
+  send({ action: 'cruise_on', target_speed: speed });
+  document.getElementById('btnCruiseOn').classList.add('active');
+  document.getElementById('btnCruiseOff').classList.remove('active');
+}
+
+function cruiseOff() {
+  send({ action: 'cruise_off' });
+  document.getElementById('btnCruiseOn').classList.remove('active');
+  document.getElementById('btnCruiseOff').classList.add('active');
+}
+
+function updateTargetSpeed(val) {
+  document.getElementById('targetSpeedVal').textContent = val;
+}
+
+function applyTargetSpeed() {
+  const val = parseInt(document.getElementById('targetSpeed').value);
+  send({ action: 'set_target_speed', value: val });
+}
+
+// ── Chart.js ───────────────────────────────────────────────
+let chart = null;
+
+function initChart() {
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+  script.onload = () => {
+    const ctx = document.getElementById('chartMain').getContext('2d');
+    Chart.defaults.color = '#4a6272';
+    Chart.defaults.borderColor = '#1e2d3a';
+
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: history.labels,
+        datasets: [
+          {
+            label: 'Speed (km/h)',
+            data: history.speed,
+            borderColor: '#00d4ff',
+            backgroundColor: 'rgba(0,212,255,0.05)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: true,
+          },
+          {
+            label: 'Temp (°C)',
+            data: history.temp,
+            borderColor: '#ff6b00',
+            backgroundColor: 'rgba(255,107,0,0.05)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: false,
+          },
+          {
+            label: 'Brake ×150',
+            data: history.brake,
+            borderColor: '#ff2a2a',
+            backgroundColor: 'rgba(255,42,42,0.05)',
+            borderWidth: 1,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: false,
+          },
+          {
+            label: 'Throttle ×150',
+            data: history.throttle,
+            borderColor: '#00e676',
+            backgroundColor: 'rgba(0,230,118,0.04)',
+            borderWidth: 1,
+            pointRadius: 0,
+            tension: 0.4,
+            fill: false,
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            labels: {
+              color: '#4a6272',
+              font: { family: "'Share Tech Mono'", size: 10 },
+              boxWidth: 12,
+            }
+          },
+          tooltip: {
+            backgroundColor: '#0e1318',
+            borderColor: '#1e2d3a',
+            borderWidth: 1,
+            titleFont: { family: "'Share Tech Mono'", size: 10 },
+            bodyFont:  { family: "'Share Tech Mono'", size: 10 },
+          }
+        },
+        scales: {
+          x: {
+            ticks: { display: false },
+            grid:  { color: '#1e2d3a' },
+          },
+          y: {
+            min: 0, max: 160,
+            ticks: {
+              color: '#4a6272',
+              font: { family: "'Share Tech Mono'", size: 9 },
+              stepSize: 40,
+            },
+            grid: { color: '#1a2530' },
+          }
+        }
+      }
+    });
+  };
+  document.head.appendChild(script);
+}
+
+initChart();
+
+// ── Helpers ────────────────────────────────────────────────
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
