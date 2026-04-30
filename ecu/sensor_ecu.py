@@ -3,8 +3,6 @@
 # ecu/sensor_ecu.py — Sensor ECU (speed, temperature, brake)
 # ============================================================
 
-import random
-import math
 from config import (
     LOG_PREFIX,
     CAN_ID_TEMPERATURE, CAN_ID_SPEED, CAN_ID_BRAKE,
@@ -39,6 +37,8 @@ class SensorECU:
         # Simulation trajectory helpers
         self._target_speed: float = 60.0
         self._cycle: int = 0
+        self._manual_brake: float = 0.0
+        self._manual_target_speed: float = 0.0
 
         print(f"{LOG_PREFIX['SENSOR']} SensorECU initialized.")
 
@@ -52,9 +52,10 @@ class SensorECU:
         Called once per main loop cycle.
         """
         self._cycle += 1
+        # Apply brake input first so speed update uses latest pedal state.
+        self._update_brake()
         self._update_speed()
         self._update_temperature()
-        self._update_brake()
 
         readings = {
             "speed":       round(self._speed, 1),
@@ -88,50 +89,59 @@ class SensorECU:
     def brake(self) -> float:
         return round(self._brake, 2)
 
+    def set_manual_brake(self, pressure: float) -> None:
+        """
+        Accept operator/dashboard brake input.
+        Any value > 0 immediately overrides random brake simulation.
+        """
+        self._manual_brake = max(SENSOR_BRAKE_MIN, min(SENSOR_BRAKE_MAX, pressure))
+
+    def set_manual_target_speed(self, target_speed: float) -> None:
+        """
+        Accept operator/dashboard speed command.
+        Vehicle starts from idle and moves only toward this target.
+        """
+        self._manual_target_speed = max(SENSOR_SPEED_MIN, min(SENSOR_SPEED_MAX, target_speed))
+
     # ------------------------------------------------------------------
     # Private simulation helpers
     # ------------------------------------------------------------------
 
     def _update_speed(self) -> None:
         """
-        Smooth speed simulation: gradually accelerate / decelerate toward
-        a target speed. Target changes periodically to simulate driving.
+        Manual speed simulation:
+        - Vehicle moves only toward operator-selected target speed.
+        - Brake pressure adds additional deceleration.
         """
-        # Change target speed every ~15 cycles
-        if self._cycle % 15 == 0:
-            self._target_speed = random.uniform(
-                SENSOR_SPEED_MIN + 10,
-                SENSOR_SPEED_MAX - 10
-            )
+        if self._brake > 0.0:
+            # While braking, brake dynamics dominate and acceleration is suppressed.
+            self._speed -= (3.0 + (14.0 * self._brake))
+        else:
+            self._target_speed = self._manual_target_speed
+            delta = self._target_speed - self._speed
+            if delta >= 0:
+                self._speed += delta * 0.25
+            else:
+                self._speed += delta * 0.18
 
-        delta = self._target_speed - self._speed
-        self._speed += delta * 0.15 + random.uniform(-0.5, 0.5)
         self._speed = max(SENSOR_SPEED_MIN, min(SENSOR_SPEED_MAX, self._speed))
 
     def _update_temperature(self) -> None:
         """
-        Temperature rises with speed/load, cools slowly.
-        Injects occasional spikes to trigger AI anomaly detection.
+        Deterministic thermal behavior from speed/load only.
         """
         load_factor = self._speed / SENSOR_SPEED_MAX
         natural_heat = load_factor * 0.8
         cooling = 0.3 if self._temperature > 90 else 0.0
-
-        # Occasional thermal spike every ~40 cycles
-        spike = 4.0 if (self._cycle % 40 == 0) else 0.0
-
-        self._temperature += natural_heat - cooling + spike + random.uniform(-0.2, 0.2)
+        self._temperature += natural_heat - cooling
         self._temperature = max(SENSOR_TEMP_MIN, min(SENSOR_TEMP_MAX, self._temperature))
 
     def _update_brake(self) -> None:
         """
-        Simulate brake events: brief, random brake applications.
-        Every ~10 cycles there is a chance of braking.
+        Manual brake only: no automatic/random brake events.
         """
-        if self._cycle % 10 == 0 and random.random() < 0.3:
-            # Brake event
-            self._brake = random.uniform(0.3, 0.9)
-        else:
-            # Release brake gradually
-            self._brake = max(0.0, self._brake - 0.15)
-        self._brake = max(SENSOR_BRAKE_MIN, min(SENSOR_BRAKE_MAX, self._brake))
+        if self._manual_brake > 0.0:
+            # Manual input has highest priority for immediate response.
+            self._brake = self._manual_brake
+            return
+        self._brake = 0.0
