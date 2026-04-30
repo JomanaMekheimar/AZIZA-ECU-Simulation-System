@@ -18,6 +18,7 @@ from ecu.sensor_ecu import SensorECU
 from ecu.engine_ecu import EngineECU
 from ecu.brake_ecu  import BrakeECU
 from ecu.body_ecu   import BodyECU
+from ecu.car_control_ecu import CarControlECU
 from safety.safety_layer import SafetyLayer
 from ai.anomaly_detector import AnomalyDetector
 from telemetry.blynk_client import BlynkClient
@@ -67,17 +68,23 @@ class AZIZASimulation:
         self.engine_ecu   = EngineECU()
         self.brake_ecu    = BrakeECU()
         self.body_ecu     = BodyECU(self.lin_bus)
+        self.car_control  = CarControlECU(self.can_bus, self.lin_bus)
         self.safety_layer = SafetyLayer(self.engine_ecu, self.brake_ecu)
         self.ai_agent     = AnomalyDetector()
         self.blynk        = BlynkClient(self.engine_ecu)
-        self.server       = AZIZAServer(engine_ecu=self.engine_ecu)
+        self.server       = AZIZAServer(
+            engine_ecu=self.engine_ecu,
+            brake_ecu=self.brake_ecu,
+            car_control=self.car_control,
+        )
         self.server.start()
 
-        self._running    = True
-        self._cycle      = 0
-        self._body_state = {}
+        self._running        = True
+        self._cycle          = 0
+        self._body_state     = {}
+        self._car_ctrl_state = {}
 
-        self.engine_ecu.enable_cruise(target_speed=80.0)
+        self.engine_ecu.disable_cruise()
 
         signal.signal(signal.SIGINT,  self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -90,16 +97,23 @@ class AZIZASimulation:
             self._cycle += 1
             print(f"\n{'─'*70}\n  AZIZA CYCLE #{self._cycle:04d}\n{'─'*70}")
 
-            sensor_data    = self.sensor_ecu.read_and_publish()
-            can_messages   = self.can_bus.receive_all()
+            self.sensor_ecu.set_manual_target_speed(self.server.get_manual_target_speed())
+            self.sensor_ecu.set_manual_brake(self.server.get_manual_brake())
+            sensor_data  = self.sensor_ecu.read_and_publish()
+            can_messages = self.can_bus.receive_all()
 
+            # --- Process CAN messages in all ECUs ---
             self.engine_ecu.process_can_messages(can_messages)
             self.brake_ecu.process_can_messages(can_messages)
+            self.car_control.process_can_messages(can_messages)
 
-            engine_desired = self.engine_ecu.update()
-            brake_desired  = self.brake_ecu.update()
-            self._body_state = self.body_ecu.update(vehicle_speed=sensor_data["speed"])
+            # --- Update ECUs ---
+            engine_desired       = self.engine_ecu.update()
+            brake_desired        = self.brake_ecu.update()
+            self._body_state     = self.body_ecu.update(vehicle_speed=sensor_data["speed"])
+            self._car_ctrl_state = self.car_control.update(vehicle_speed=sensor_data["speed"])
 
+            # --- Safety layer (first pass) ---
             approved_state = self.safety_layer.evaluate(
                 sensor_data=sensor_data,
                 engine_desired=engine_desired,
@@ -107,8 +121,10 @@ class AZIZASimulation:
                 ai_suggestions=[],
             )
 
+            # --- AI anomaly detection ---
             ai_report = self.ai_agent.analyze(sensor_data, approved_state)
 
+            # --- Safety layer (second pass with AI suggestions) ---
             if ai_report.suggestions:
                 approved_state = self.safety_layer.evaluate(
                     sensor_data=sensor_data,
@@ -117,6 +133,7 @@ class AZIZASimulation:
                     ai_suggestions=ai_report.suggestions,
                 )
 
+            # --- Telemetry ---
             self.blynk.run_loop()
             self.blynk.send_telemetry(
                 speed=approved_state["speed"],
@@ -128,13 +145,34 @@ class AZIZASimulation:
 
             self._print_footer(approved_state, ai_report)
 
+            # --- Car control state for dashboard ---
+            cc = self._car_ctrl_state
+            win_pos   = cc.get("windows",    {}).get("positions", {})
+            lgt       = cc.get("lights",     {})
+            locks     = cc.get("door_locks", {})
+
             dashboard_state = {
                 **approved_state,
-                "ai_risk":   ai_report.risk_level,
-                "ai_score":  ai_report.risk_score,
-                "lights_on": self._body_state.get("lighting_on", False),
-                "fan_speed": self._body_state.get("fan_speed", 0),
-                "cycle":     self._cycle,
+                "ai_risk":    ai_report.risk_level,
+                "ai_score":   ai_report.risk_score,
+                # Body ECU (legacy HVAC / ambient lighting)
+                "lights_on":  self._body_state.get("lighting_on", False),
+                "fan_speed":  self._body_state.get("fan_speed", 0),
+                # Car Control ECU
+                "win_FL":  win_pos.get(0, 0),
+                "win_FR":  win_pos.get(1, 0),
+                "win_RL":  win_pos.get(2, 0),
+                "win_RR":  win_pos.get(3, 0),
+                "light_headlights": lgt.get("headlights", "OFF"),
+                "light_interior":   lgt.get("interior",   "OFF"),
+                "light_hazard":     lgt.get("hazard",     "OFF"),
+                "light_fog":        lgt.get("fog",        "OFF"),
+                "door_FL":  locks.get("FL",  True),
+                "door_FR":  locks.get("FR",  True),
+                "door_RL":  locks.get("RL",  True),
+                "door_RR":  locks.get("RR",  True),
+                "all_locked": locks.get("all_locked", True),
+                "cycle":      self._cycle,
             }
             self.server.push_state(dashboard_state, self._log.drain())
 
